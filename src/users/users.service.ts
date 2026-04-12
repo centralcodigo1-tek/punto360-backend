@@ -1,0 +1,125 @@
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
+import * as bcrypt from 'bcrypt';
+import type { ActiveUserData } from '../auth/interfaces/active-user-data.interface';
+
+@Injectable()
+export class UsersService {
+  constructor(private prisma: PrismaService) {}
+
+  /** Listar usuarios de la empresa actual con sus roles y sucursales */
+  async findAll(user: ActiveUserData) {
+    return this.prisma.users.findMany({
+      where: { company_id: user.companyId },
+      include: {
+        user_roles: { include: { roles: true } },
+        user_branches: { include: { branches: true } }
+      },
+      orderBy: { created_at: 'desc' }
+    });
+  }
+
+  /** Crear un nuevo usuario (colaborador) */
+  async create(dto: CreateUserDto, creator: ActiveUserData) {
+    const { password, roleIds, branchIds, ...userData } = dto;
+    const password_hash = await bcrypt.hash(password, 10);
+    const email = userData.email.toLowerCase().trim();
+
+    return this.prisma.$transaction(async (tx) => {
+      const newUser = await tx.users.create({
+        data: {
+          ...userData,
+          email,
+          password_hash,
+          company_id: creator.companyId,
+          is_active: true
+        }
+      });
+
+      // Asignar Roles
+      if (roleIds && roleIds.length > 0) {
+        await tx.user_roles.createMany({
+          data: roleIds.map(rid => ({ user_id: newUser.id, role_id: rid }))
+        });
+      }
+
+      // Asignar Sucursales
+      if (branchIds && branchIds.length > 0) {
+        await tx.user_branches.createMany({
+          data: branchIds.map(bid => ({ user_id: newUser.id, branch_id: bid }))
+        });
+      }
+
+      return newUser;
+    });
+  }
+
+  /** Actualizar un usuario */
+  async update(id: string, dto: UpdateUserDto, actor: ActiveUserData) {
+    const { password, roleIds, branchIds, ...userData } = dto;
+    
+    // Verificamos existencia
+    const userToUpdate = await this.prisma.users.findUnique({ where: { id } });
+    if (!userToUpdate || userToUpdate.company_id !== actor.companyId) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const data: any = { ...userData };
+    if (userData.email) {
+      data.email = userData.email.toLowerCase().trim();
+    }
+    if (password) {
+      data.password_hash = await bcrypt.hash(password, 10);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.users.update({
+        where: { id },
+        data
+      });
+
+      // Actualizar Roles si se proveen
+      if (roleIds) {
+        await tx.user_roles.deleteMany({ where: { user_id: id } });
+        if (roleIds.length > 0) {
+          await tx.user_roles.createMany({
+            data: roleIds.map(rid => ({ user_id: id, role_id: rid }))
+          });
+        }
+      }
+
+      // Actualizar Sucursales si se proveen
+      if (branchIds) {
+        await tx.user_branches.deleteMany({ where: { user_id: id } });
+        if (branchIds.length > 0) {
+          await tx.user_branches.createMany({
+            data: branchIds.map(bid => ({ user_id: id, branch_id: bid }))
+          });
+        }
+      }
+
+      return updatedUser;
+    });
+  }
+
+  /** 
+   * Eliminar/Desactivar Usuario 
+   * RESTRICCIÓN: No puede borrarse a sí mismo.
+   */
+  async remove(id: string, actor: ActiveUserData) {
+    if (id === actor.sub) {
+      throw new ForbiddenException('No puedes eliminar tu propio usuario administrador.');
+    }
+
+    const userToDelete = await this.prisma.users.findUnique({ where: { id } });
+    if (!userToDelete || userToDelete.company_id !== actor.companyId) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // Por seguridad e integridad de datos (ventas/registros), 
+    // desactivamos en lugar de borrar físicamente si hay registros asociados, 
+    // pero aquí permitiremos el delete si el negocio lo requiere.
+    return this.prisma.users.delete({ where: { id } });
+  }
+}

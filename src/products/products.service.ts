@@ -1,0 +1,140 @@
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateProductDto } from './dto/create-product.dto';
+import type { ActiveUserData } from '../auth/interfaces/active-user-data.interface';
+
+@Injectable()
+export class ProductsService {
+    constructor(private prisma: PrismaService) { }
+
+    async create(dto: CreateProductDto, user: ActiveUserData) {
+        return this.prisma.$transaction(async (tx) => {
+
+            // 1️⃣ Crear producto
+            const product = await tx.products.create({
+                data: {
+                    name: dto.name,
+                    sku: dto.sku,
+                    category_id: dto.category_id,
+                    cost_price: dto.cost_price,
+                    sale_price: dto.sale_price,
+                    unit_type: dto.unit_type || 'UNIT',
+                    is_active: dto.is_active,
+                    company_id: user.companyId,
+                },
+            });
+
+            // 2️⃣ Crear stock inicial en la sucursal del usuario
+            await tx.stock.create({
+                data: {
+                    product_id: product.id,
+                    branch_id: user.branchIds[0],
+                    quantity: dto.stock,
+                },
+            });
+
+            return product;
+        });
+    }
+
+
+    async getNextSku(user: ActiveUserData) {
+        const branch = await this.prisma.branches.findUnique({
+            where: { id: user.branchIds[0] },
+        });
+
+        if (!branch) {
+            throw new Error('Sucursal no encontrada');
+        }
+        console.log(branch)
+        const branchCode = branch.code || 'MAIN';
+
+        const lastProduct = await this.prisma.products.findFirst({
+            where: {
+                company_id: user.companyId,
+                sku: {
+                    startsWith: branchCode,
+                },
+            },
+            orderBy: {
+                created_at: 'desc',
+            },
+        });
+
+        let nextNumber = 1;
+
+        if (lastProduct?.sku) {
+            const lastNumber = parseInt(lastProduct.sku.split('-')[1]);
+            nextNumber = lastNumber + 1;
+        }
+
+        const formattedNumber = nextNumber.toString().padStart(4, '0');
+
+        return {
+            sku: `${branchCode}-${formattedNumber}`,
+        };
+    }
+
+    async findAll(user: ActiveUserData) {
+        return this.prisma.products.findMany({
+            where: {
+                company_id: user.companyId,
+            },
+            include: {
+                categories: true,
+                stock: {
+                    where: {
+                        branch_id: { in: user.branchIds }
+                    }
+                }
+            },
+            orderBy: {
+                created_at: 'desc'
+            }
+        });
+    }
+
+    async toggleStatus(id: string, user: ActiveUserData) {
+        const product = await this.prisma.products.findFirst({
+            where: {
+                id,
+                company_id: user.companyId
+            }
+        });
+
+        if (!product) {
+            throw new Error('Producto no encontrado o no pertenece a tu negocio');
+        }
+
+        return this.prisma.products.update({
+            where: { id },
+            data: { is_active: !product.is_active }
+        });
+    }
+
+    async update(id: string, dto: CreateProductDto, user: ActiveUserData) {
+        // Ignoramos stock en la actualización general por diseño de POS
+        const product = await this.prisma.products.findFirst({
+            where: {
+                id,
+                company_id: user.companyId
+            }
+        });
+
+        if (!product) {
+            throw new Error('Producto no encontrado o no autorizado');
+        }
+
+        return this.prisma.products.update({
+            where: { id },
+            data: {
+                name: dto.name,
+                category_id: dto.category_id,
+                cost_price: dto.cost_price,
+                sale_price: dto.sale_price,
+                unit_type: dto.unit_type || 'UNIT',
+                is_active: dto.is_active
+            }
+        });
+    }
+}

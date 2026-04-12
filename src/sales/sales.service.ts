@@ -1,0 +1,252 @@
+import { Injectable, BadRequestException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateSaleDto } from './dto/create-sale.dto';
+import type { ActiveUserData } from '../auth/interfaces/active-user-data.interface';
+
+@Injectable()
+export class SalesService {
+    constructor(private prisma: PrismaService) {}
+
+    async createSale(dto: CreateSaleDto, user: ActiveUserData) {
+        if (!user.branchIds || user.branchIds.length === 0) {
+            throw new BadRequestException("El usuario no tiene una sucursal asignada.");
+        }
+        
+        const branchId = user.branchIds[0];
+
+        return this.prisma.$transaction(async (tx) => {
+            // 1. Crear el Ticket de Venta
+            const sale = await tx.sales.create({
+                data: {
+                    company_id: user.companyId,
+                    branch_id: branchId,
+                    user_id: user.sub,
+                    total: dto.total,
+                    payment_method: dto.paymentMethod,
+                    status: 'PAID'
+                }
+            });
+
+            // 2. Procesar cada item, registrar en sale_items y descontar stock
+            for (const item of dto.items) {
+                // Registrar detalle de venta
+                await tx.sale_items.create({
+                    data: {
+                        sale_id: sale.id,
+                        product_id: item.productId,
+                        quantity: item.quantity,
+                        price: item.price,
+                        subtotal: item.quantity * item.price
+                    }
+                });
+
+                // Validar y Actualizar Stock
+                const currentStock = await tx.stock.findFirst({
+                    where: { product_id: item.productId, branch_id: branchId }
+                });
+
+                if (!currentStock ||  currentStock.quantity.toNumber() < item.quantity) {
+                    throw new BadRequestException(`Inventario insuficiente para procesar la venta (Producto ID: ${item.productId})`);
+                }
+
+                await tx.stock.update({
+                    where: { id: currentStock.id },
+                    data: { quantity: currentStock.quantity.toNumber() - item.quantity }
+                });
+
+                // Registrar Movimiento de Inventario de Salida
+                await tx.inventory_movements.create({
+                    data: {
+                        product_id: item.productId,
+                        branch_id: branchId,
+                        type: 'OUT_SALE',
+                        quantity: item.quantity,
+                        reason: 'Venta Caja POS',
+                        reference_id: sale.id
+                    }
+                });
+            }
+
+            return sale;
+        });
+    }
+
+    async getSalesStats(user: ActiveUserData) {
+        if (!user.branchIds || user.branchIds.length === 0) {
+            throw new BadRequestException("El usuario no tiene una sucursal asignada.");
+        }
+
+        const now = new Date();
+        // Inicio del día actual (00:00:00 hora local)
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        // Inicio del mes actual (Día 1, 00:00:00)
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+
+        // Agregamos filtro multi-sucursal
+        const baseWhere = { 
+            company_id: user.companyId, 
+            branch_id: { in: user.branchIds }, 
+            status: 'PAID' 
+        };
+
+        const [todaySales, monthSales, recentSales, lowStock, totalProducts] = await Promise.all([
+            // Ventas de hoy (Consolidado)
+            this.prisma.sales.findMany({
+                where: { ...baseWhere, created_at: { gte: todayStart } },
+                select: { total: true, payment_method: true }
+            }),
+            // Ventas del mes (Consolidado)
+            this.prisma.sales.findMany({
+                where: { ...baseWhere, created_at: { gte: monthStart } },
+                select: { total: true }
+            }),
+            // Ultimas 8 ventas (Global de las sucursales del usuario)
+            this.prisma.sales.findMany({
+                where: { 
+                    company_id: user.companyId, 
+                    branch_id: { in: user.branchIds } 
+                },
+                include: { 
+                    sale_items: { 
+                        include: { products: { select: { name: true } } } 
+                    },
+                    branches: { select: { name: true } }
+                },
+                orderBy: { created_at: 'desc' },
+                take: 8
+            }),
+            // Productos con stock bajo en CUALQUIERA de las sedes asignadas
+            this.prisma.stock.count({
+                where: { branch_id: { in: user.branchIds }, quantity: { lt: 5 } }
+            }),
+            // Total productos activos de la compañía
+            this.prisma.products.count({
+                where: { company_id: user.companyId, is_active: true }
+            }),
+        ]);
+
+        const totalHoy = todaySales.reduce((sum, s) => sum + Number(s.total), 0);
+        const efectivoHoy = todaySales
+            .filter(s => s.payment_method === 'CASH')
+            .reduce((sum, s) => sum + Number(s.total), 0);
+        const totalMes = monthSales.reduce((sum, s) => sum + Number(s.total), 0);
+
+        return {
+            totalHoy,
+            efectivoHoy,
+            ticketsHoy: todaySales.length,
+            totalMes,
+            lowStock,
+            totalProducts,
+            recentSales,
+        };
+    }
+
+    async getSalesHistory(startDate: string, endDate: string, user: ActiveUserData) {
+        if (!user.branchIds || user.branchIds.length === 0) {
+            throw new BadRequestException("El usuario no tiene sucursales asignadas.");
+        }
+
+        const whereClause: any = {
+            company_id: user.companyId,
+            branch_id: { in: user.branchIds },
+        };
+
+        if (startDate && endDate) {
+            const start = new Date(startDate);
+            start.setHours(0, 0, 0, 0);
+            
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+
+            whereClause.created_at = {
+                gte: start,
+                lte: end,
+            };
+        } else {
+            // Por defecto ventas de los ultimos 7 dias para evitar confusiones de "lista vacía"
+            const start = new Date();
+            start.setDate(start.getDate() - 7);
+            start.setHours(0,0,0,0);
+            whereClause.created_at = {
+                gte: start
+            };
+        }
+
+        return this.prisma.sales.findMany({
+            where: whereClause,
+            include: {
+                sale_items: {
+                    include: {
+                        products: {
+                            select: {
+                                name: true,
+                                sku: true,
+                                unit_type: true
+                            }
+                        }
+                    }
+                }
+            },
+            orderBy: {
+                created_at: 'desc'
+            }
+        });
+    }
+
+    async cancelSale(saleId: string, user: ActiveUserData) {
+        if (!user.branchIds || user.branchIds.length === 0) {
+            throw new BadRequestException("El usuario no tiene una sucursal asignada.");
+        }
+        const branchId = user.branchIds[0];
+
+        return this.prisma.$transaction(async (tx) => {
+            const sale = await tx.sales.findFirst({
+                where: { id: saleId, company_id: user.companyId, branch_id: branchId },
+                include: { sale_items: true }
+            });
+
+            if (!sale) {
+                throw new BadRequestException("Venta no encontrada.");
+            }
+
+            if (sale.status === 'CANCELLED') {
+                throw new BadRequestException("La venta ya se encuentra anulada.");
+            }
+
+            // 1. Marcar como CANCELLED
+            await tx.sales.update({
+                where: { id: saleId },
+                data: { status: 'CANCELLED' }
+            });
+
+            // 2. Devolver items al Stock
+            for (const item of sale.sale_items) {
+                const currentStock = await tx.stock.findFirst({
+                    where: { product_id: item.product_id, branch_id: branchId }
+                });
+
+                if (currentStock) {
+                    await tx.stock.update({
+                        where: { id: currentStock.id },
+                        data: { quantity: currentStock.quantity.toNumber() + (item.quantity ? item.quantity.toNumber() : 0) }
+                    });
+                }
+
+                // Registrar devolución
+                await tx.inventory_movements.create({
+                    data: {
+                        product_id: item.product_id,
+                        branch_id: branchId,
+                        type: 'IN_CANCEL',
+                        quantity: item.quantity,
+                        reason: 'Anulación de Venta',
+                        reference_id: sale.id
+                    }
+                });
+            }
+
+            return { message: "Venta anulada correctamente" };
+        });
+    }
+}
