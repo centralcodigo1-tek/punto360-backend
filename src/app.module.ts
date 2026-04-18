@@ -22,6 +22,7 @@ import { CashRegistersModule } from './cash-registers/cash-registers.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
 import { PurchasesModule } from './purchases/purchases.module';
 import { RolesModule } from './roles/roles.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [PrismaModule, AuthModule, UsersModule, CompaniesModule, BranchesModule, ProductsModule, InventoryModule, SalesModule, ExpensesModule, CashModule, ReportsModule,
@@ -30,7 +31,8 @@ import { RolesModule } from './roles/roles.module';
     CashRegistersModule,
     SuppliersModule,
     PurchasesModule,
-    RolesModule
+    RolesModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService,
