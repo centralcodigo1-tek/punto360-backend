@@ -13,6 +13,11 @@ export class CashRegistersController {
         return this.cashRegistersService.getCurrentSession(user);
     }
 
+    @Get('current/stats')
+    getLiveStats(@ActiveUser() user: ActiveUserData) {
+        return this.cashRegistersService.getSessionLiveStats(user);
+    }
+
     @Get('history')
     getHistory(@ActiveUser() user: ActiveUserData) {
         return this.cashRegistersService.getHistory(user);

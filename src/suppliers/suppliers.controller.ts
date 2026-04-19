@@ -13,6 +13,11 @@ export class SuppliersController {
         return this.suppliersService.findAll(user);
     }
 
+    @Get(':id/purchases')
+    findOnePurchases(@Param('id') id: string, @ActiveUser() user: ActiveUserData) {
+        return this.suppliersService.findOnePurchases(id, user);
+    }
+
     @Post()
     create(@Body() dto: CreateSupplierDto, @ActiveUser() user: ActiveUserData) {
         return this.suppliersService.create(dto, user);

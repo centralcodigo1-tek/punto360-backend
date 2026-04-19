@@ -32,6 +32,7 @@ model branches {
   code                String?               @unique
   companies           companies?            @relation(fields: [company_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   cash_registers      cash_registers[]
+  cartera_movements   cartera_movements[]
   expenses            expenses[]
   inventory_movements inventory_movements[]
   purchases           purchases[]
@@ -98,18 +99,35 @@ model companies {
   users           users[]
   roles           roles[]
   cash_registers  cash_registers[]
+  cartera_movements cartera_movements[]
+  subscriptions   subscriptions[]
 }
 
 model customers {
-  id         String     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  company_id String?    @db.Uuid
-  name       String
-  phone      String?
-  email      String?
-  is_active  Boolean?   @default(true)
-  created_at DateTime?  @default(now()) @db.Timestamp(6)
-  companies  companies? @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sales      sales[]
+  id                String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id        String?             @db.Uuid
+  name              String
+  phone             String?
+  email             String?
+  credit_limit      Decimal?            @db.Decimal(12, 2)
+  notes             String?
+  is_active         Boolean?            @default(true)
+  created_at        DateTime?           @default(now()) @db.Timestamp(6)
+  companies         companies?          @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sales             sales[]
+  customer_payments customer_payments[]
+}
+
+model customer_payments {
+  id             String     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  customer_id    String     @db.Uuid
+  user_id        String?    @db.Uuid
+  amount         Decimal    @db.Decimal(12, 2)
+  payment_method String?    @default("CASH")
+  notes          String?
+  created_at     DateTime?  @default(now()) @db.Timestamp(6)
+  customers      customers  @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users          users?     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model expenses {
@@ -275,6 +293,22 @@ model user_branches {
   @@id([user_id, branch_id])
 }
 
+model cartera_movements {
+  id             String     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id     String     @db.Uuid
+  branch_id      String?    @db.Uuid
+  user_id        String?    @db.Uuid
+  type           String
+  amount         Decimal    @db.Decimal(12, 2)
+  reason         String
+  reference_id   String?    @db.Uuid
+  reference_type String?
+  created_at     DateTime?  @default(now()) @db.Timestamp(6)
+  companies      companies  @relation(fields: [company_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  branches       branches?  @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users          users?     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
 model users {
   id             String           @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   company_id     String?          @db.Uuid
@@ -284,14 +318,28 @@ model users {
   is_active      Boolean?         @default(true)
   created_at     DateTime?        @default(now()) @db.Timestamp(6)
   user_name      String?
-  audit_logs     audit_logs[]
-  cash_movements cash_movements[]
-  cash_registers cash_registers[]
-  sales          sales[]
-  user_roles     user_roles[]
-  user_branches  user_branches[]
-  purchase_payments purchase_payments[]
-  companies      companies?       @relation(fields: [company_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  audit_logs          audit_logs[]
+  cash_movements      cash_movements[]
+  cash_registers      cash_registers[]
+  cartera_movements   cartera_movements[]
+  sales               sales[]
+  user_roles          user_roles[]
+  user_branches       user_branches[]
+  purchase_payments   purchase_payments[]
+  customer_payments   customer_payments[]
+  companies           companies?          @relation(fields: [company_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model subscriptions {
+  id         String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  company_id String    @db.Uuid
+  start_date DateTime  @db.Timestamp(6)
+  end_date   DateTime  @db.Timestamp(6)
+  amount     Decimal   @default(800000) @db.Decimal(12, 2)
+  status     String    @default("active")
+  notes      String?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  companies  companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
 }
 
 model permissions {

@@ -14,6 +14,11 @@ export class SalesService {
         
         const branchId = user.branchIds[0];
 
+        const isCredit = dto.paymentMethod === 'CREDIT';
+        if (isCredit && !dto.customerId) {
+            throw new BadRequestException('Una venta a crédito requiere un cliente asociado.');
+        }
+
         return this.prisma.$transaction(async (tx) => {
             // 1. Crear el Ticket de Venta
             const sale = await tx.sales.create({
@@ -21,9 +26,11 @@ export class SalesService {
                     company_id: user.companyId,
                     branch_id: branchId,
                     user_id: user.sub,
+                    customer_id: dto.customerId || null,
                     total: dto.total,
                     payment_method: dto.paymentMethod,
-                    status: 'PAID'
+                    status: 'PAID',
+                    is_credit: isCredit,
                 }
             });
 
@@ -176,21 +183,17 @@ export class SalesService {
         return this.prisma.sales.findMany({
             where: whereClause,
             include: {
+                branches: { select: { name: true } },
+                users: { select: { name: true } },
                 sale_items: {
                     include: {
                         products: {
-                            select: {
-                                name: true,
-                                sku: true,
-                                unit_type: true
-                            }
+                            select: { name: true, sku: true, unit_type: true }
                         }
                     }
                 }
             },
-            orderBy: {
-                created_at: 'desc'
-            }
+            orderBy: { created_at: 'desc' }
         });
     }
 

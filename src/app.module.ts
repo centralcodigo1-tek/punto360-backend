@@ -23,6 +23,9 @@ import { SuppliersModule } from './suppliers/suppliers.module';
 import { PurchasesModule } from './purchases/purchases.module';
 import { RolesModule } from './roles/roles.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { SuperAdminModule } from './superadmin/superadmin.module';
+import { CustomersModule } from './customers/customers.module';
+import { CarteraModule } from './cartera/cartera.module';
 
 @Module({
   imports: [PrismaModule, AuthModule, UsersModule, CompaniesModule, BranchesModule, ProductsModule, InventoryModule, SalesModule, ExpensesModule, CashModule, ReportsModule,
@@ -33,6 +36,9 @@ import { NotificationsModule } from './notifications/notifications.module';
     PurchasesModule,
     RolesModule,
     NotificationsModule,
+    SuperAdminModule,
+    CustomersModule,
+    CarteraModule,
   ],
   controllers: [AppController],
   providers: [AppService,

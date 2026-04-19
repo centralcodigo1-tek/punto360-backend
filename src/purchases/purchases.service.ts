@@ -45,26 +45,41 @@ export class PurchasesService {
                     },
                 });
 
-                // 3. Integración con Caja: Si es efectivo, registrar movimiento de salida
-                if (dto.paymentMethod === 'CASH') {
+                // 3. Obtener nombre del proveedor para el motivo
+                let supplierName = "";
+                if (dto.supplierId) {
+                    const supplier = await tx.suppliers.findUnique({ where: { id: dto.supplierId }, select: { name: true } });
+                    if (supplier) supplierName = supplier.name;
+                }
+                const purchaseRef = `Compra #${purchase.id.split('-')[0]}${supplierName ? ` [${supplierName}]` : ''}`;
+
+                if (dto.paymentSource === 'CARTERA') {
+                    // Descontar de cartera
+                    await tx.cartera_movements.create({
+                        data: {
+                            company_id: user.companyId,
+                            branch_id: branchId,
+                            user_id: user.sub,
+                            type: 'EXPENSE',
+                            amount: paidAmount,
+                            reason: `Pago ${purchaseRef}`,
+                            reference_id: purchase.id,
+                            reference_type: 'PURCHASE',
+                        },
+                    });
+                } else if (dto.paymentMethod === 'CASH') {
+                    // Descontar de caja si hay sesión abierta
                     const activeSession = await tx.cash_registers.findFirst({
                         where: { branch_id: branchId, company_id: user.companyId, status: 'OPEN' }
                     });
-
                     if (activeSession) {
-                        let supplierPart = "";
-                        if (dto.supplierId) {
-                            const supplier = await tx.suppliers.findUnique({ where: { id: dto.supplierId }, select: { name: true } });
-                            if (supplier) supplierPart = ` [${supplier.name}]`;
-                        }
-
                         await tx.cash_movements.create({
                             data: {
                                 cash_register_id: activeSession.id,
                                 user_id: user.sub,
                                 type: 'EXPENSE',
                                 amount: paidAmount,
-                                reason: `Abono inicial Compra #${purchase.id.split('-')[0]}${supplierPart}`,
+                                reason: `Pago ${purchaseRef}`,
                             }
                         });
                     }
@@ -98,6 +113,17 @@ export class PurchasesService {
                             product_id: item.productId,
                             branch_id: branchId,
                             quantity: item.quantity,
+                        },
+                    });
+                }
+
+                // Actualizar costo y precio de venta del producto
+                if (item.cost > 0 || (item.salePrice !== undefined && item.salePrice > 0)) {
+                    await tx.products.update({
+                        where: { id: item.productId },
+                        data: {
+                            ...(item.cost > 0 && { cost_price: item.cost }),
+                            ...(item.salePrice !== undefined && item.salePrice > 0 && { sale_price: item.salePrice }),
                         },
                     });
                 }

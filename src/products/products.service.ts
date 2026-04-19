@@ -49,23 +49,23 @@ export class ProductsService {
         console.log(branch)
         const branchCode = branch.code || 'MAIN';
 
-        const lastProduct = await this.prisma.products.findFirst({
+        const productsWithSku = await this.prisma.products.findMany({
             where: {
                 company_id: user.companyId,
-                sku: {
-                    startsWith: branchCode,
-                },
+                sku: { startsWith: branchCode },
             },
-            orderBy: {
-                created_at: 'desc',
-            },
+            select: { sku: true },
         });
 
         let nextNumber = 1;
 
-        if (lastProduct?.sku) {
-            const lastNumber = parseInt(lastProduct.sku.split('-')[1]);
-            nextNumber = lastNumber + 1;
+        if (productsWithSku.length > 0) {
+            const numbers = productsWithSku
+                .map(p => parseInt(p.sku.split('-').at(-1) ?? '0', 10))
+                .filter(n => !isNaN(n));
+            if (numbers.length > 0) {
+                nextNumber = Math.max(...numbers) + 1;
+            }
         }
 
         const formattedNumber = nextNumber.toString().padStart(4, '0');

@@ -1,4 +1,4 @@
-import { IsArray, IsNumber, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsNumber, IsString, IsOptional, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 class SaleItemDto {
@@ -23,4 +23,8 @@ export class CreateSaleDto {
 
     @IsNumber()
     total: number;
+
+    @IsOptional()
+    @IsString()
+    customerId?: string;
 }

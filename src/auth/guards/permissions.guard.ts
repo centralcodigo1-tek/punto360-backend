@@ -29,6 +29,11 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException('Permisos no encontrados');
     }
 
+    // ADMIN y SUPERADMIN tienen acceso total sin importar los permisos del JWT
+    if (user.role === 'ADMIN' || user.role === 'SUPERADMIN') {
+      return true;
+    }
+
     const hasPermissions = requiredPermissions.every(permission =>
       user.permissions.includes(permission),
     );

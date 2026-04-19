@@ -27,4 +27,8 @@ export class AddExpenseDto {
 
     @IsString()
     reason: string;
+
+    @IsOptional()
+    @IsString()
+    source?: 'CASH' | 'CARTERA';
 }

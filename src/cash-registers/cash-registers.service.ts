@@ -80,14 +80,19 @@ export class CashRegistersService {
             .filter(s => s.payment_method === 'TRANSFER')
             .reduce((sum, s) => sum + Number(s.total), 0);
 
-        // Gastos de caja en efectivo del periodo
-        const expenses = await this.prisma.cash_movements.findMany({
-            where: { cash_register_id: sessionId, type: 'EXPENSE' },
+        // Movimientos manuales de caja (gastos e ingresos)
+        const allMovements = await this.prisma.cash_movements.findMany({
+            where: { cash_register_id: sessionId },
         });
-        const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount), 0);
+        const totalExpenses = allMovements
+            .filter(m => m.type === 'EXPENSE')
+            .reduce((sum, m) => sum + Number(m.amount), 0);
+        const totalIncomes = allMovements
+            .filter(m => m.type === 'INCOME')
+            .reduce((sum, m) => sum + Number(m.amount), 0);
 
         const openingAmount = Number(session.opening_amount ?? 0);
-        const expectedCash = openingAmount + cashSales - totalExpenses;
+        const expectedCash = openingAmount + cashSales + totalIncomes - totalExpenses;
         const difference = dto.closing_amount - expectedCash;
 
         const closed = await this.prisma.cash_registers.update({
@@ -100,6 +105,40 @@ export class CashRegistersService {
             },
         });
 
+        // Pasar ingresos del turno a cartera (separados por método)
+        const closedAt = new Date();
+        const turnoLabel = `Turno ${session.opened_at ? new Date(session.opened_at).toLocaleDateString('es-CO') : ''}`;
+
+        if (dto.closing_amount > 0) {
+            await this.prisma.cartera_movements.create({
+                data: {
+                    company_id: user.companyId,
+                    branch_id: branchId,
+                    user_id: user.sub,
+                    type: 'INCOME',
+                    amount: dto.closing_amount,
+                    reason: `Cierre de caja - Efectivo (${turnoLabel})`,
+                    reference_id: closed.id,
+                    reference_type: 'CASH_CLOSING',
+                },
+            });
+        }
+
+        if (transferSales > 0) {
+            await this.prisma.cartera_movements.create({
+                data: {
+                    company_id: user.companyId,
+                    branch_id: branchId,
+                    user_id: user.sub,
+                    type: 'INCOME',
+                    amount: transferSales,
+                    reason: `Cierre de caja - Transferencias (${turnoLabel})`,
+                    reference_id: closed.id,
+                    reference_type: 'CASH_CLOSING',
+                },
+            });
+        }
+
         return {
             session: closed,
             summary: {
@@ -109,6 +148,7 @@ export class CashRegistersService {
                 transferSales,
                 totalSales: cashSales + cardSales + transferSales,
                 totalExpenses,
+                totalIncomes,
                 expectedCash,
                 closingAmount: dto.closing_amount,
                 difference,
@@ -117,7 +157,41 @@ export class CashRegistersService {
         };
     }
 
-    /** Registrar un gasto de caja */
+    /** Stats en vivo de la sesión abierta (ventas por método de pago) */
+    async getSessionLiveStats(user: ActiveUserData) {
+        const branchId = user.branchIds?.[0];
+        if (!branchId) throw new BadRequestException('Sin sucursal asignada.');
+
+        const session = await this.prisma.cash_registers.findFirst({
+            where: { branch_id: branchId, company_id: user.companyId, status: 'OPEN' },
+            select: { id: true, opened_at: true },
+        });
+        if (!session) return null;
+
+        const salesInSession = await this.prisma.sales.findMany({
+            where: {
+                branch_id: branchId,
+                company_id: user.companyId,
+                status: 'PAID',
+                created_at: { gte: session.opened_at! },
+            },
+            select: { total: true, payment_method: true },
+        });
+
+        const cashSales = salesInSession.filter(s => s.payment_method === 'CASH').reduce((sum, s) => sum + Number(s.total), 0);
+        const cardSales = salesInSession.filter(s => s.payment_method === 'CARD').reduce((sum, s) => sum + Number(s.total), 0);
+        const transferSales = salesInSession.filter(s => s.payment_method === 'TRANSFER').reduce((sum, s) => sum + Number(s.total), 0);
+
+        return {
+            cashSales,
+            cardSales,
+            transferSales,
+            totalSales: cashSales + cardSales + transferSales,
+            ticketsCount: salesInSession.length,
+        };
+    }
+
+    /** Registrar un gasto — desde caja o desde cartera */
     async addExpense(sessionId: string, dto: AddExpenseDto, user: ActiveUserData) {
         const branchId = user.branchIds?.[0];
         if (!branchId) throw new BadRequestException('Sin sucursal asignada.');
@@ -126,6 +200,34 @@ export class CashRegistersService {
             where: { id: sessionId, branch_id: branchId, company_id: user.companyId, status: 'OPEN' },
         });
         if (!session) throw new NotFoundException('Sesión de caja no encontrada o ya cerrada.');
+
+        if (dto.source === 'CARTERA') {
+            // Validar saldo de cartera
+            const movements = await this.prisma.cartera_movements.findMany({
+                where: { company_id: user.companyId },
+                select: { type: true, amount: true },
+            });
+            const balance = movements.reduce((sum, m) =>
+                m.type === 'INCOME' ? sum + Number(m.amount) : sum - Number(m.amount), 0);
+
+            if (dto.amount > balance) {
+                throw new BadRequestException(
+                    `Saldo insuficiente en cartera. Disponible: $${balance.toFixed(0)}`
+                );
+            }
+
+            return this.prisma.cartera_movements.create({
+                data: {
+                    company_id: user.companyId,
+                    branch_id: branchId,
+                    user_id: user.sub,
+                    type: 'EXPENSE',
+                    amount: dto.amount,
+                    reason: dto.reason,
+                    reference_type: 'MANUAL_EXPENSE',
+                },
+            });
+        }
 
         return this.prisma.cash_movements.create({
             data: {
@@ -138,19 +240,65 @@ export class CashRegistersService {
         });
     }
 
-    /** Historial de sesiones cerradas */
+    /** Historial de arqueos con desglose completo */
     async getHistory(user: ActiveUserData) {
         const branchId = user.branchIds?.[0];
         if (!branchId) throw new BadRequestException('Sin sucursal asignada.');
 
-        return this.prisma.cash_registers.findMany({
+        const sessions = await this.prisma.cash_registers.findMany({
             where: { branch_id: branchId, company_id: user.companyId },
             include: {
                 users: { select: { name: true, user_name: true } },
-                cash_movements: true,
+                cash_movements: { orderBy: { created_at: 'asc' } },
             },
             orderBy: { opened_at: 'desc' },
-            take: 20,
+            take: 30,
         });
+
+        const enriched = await Promise.all(sessions.map(async session => {
+            const closedAt = session.closed_at ?? new Date();
+            const salesInSession = await this.prisma.sales.findMany({
+                where: {
+                    branch_id: branchId,
+                    company_id: user.companyId,
+                    status: 'PAID',
+                    created_at: { gte: session.opened_at!, lte: closedAt },
+                },
+                select: { total: true, payment_method: true },
+            });
+
+            const cashSales = salesInSession.filter(s => s.payment_method === 'CASH').reduce((sum, s) => sum + Number(s.total), 0);
+            const cardSales = salesInSession.filter(s => s.payment_method === 'CARD').reduce((sum, s) => sum + Number(s.total), 0);
+            const transferSales = salesInSession.filter(s => s.payment_method === 'TRANSFER').reduce((sum, s) => sum + Number(s.total), 0);
+            const totalExpenses = session.cash_movements.filter(m => m.type === 'EXPENSE').reduce((sum, m) => sum + Number(m.amount), 0);
+            const openingAmount = Number(session.opening_amount ?? 0);
+            const closingAmount = Number(session.closing_amount ?? 0);
+            const expectedCash = openingAmount + cashSales - totalExpenses;
+
+            return {
+                id: session.id,
+                name: session.name,
+                status: session.status,
+                opened_at: session.opened_at,
+                closed_at: session.closed_at,
+                notes: session.notes,
+                cashier: session.users,
+                cash_movements: session.cash_movements,
+                summary: {
+                    openingAmount,
+                    cashSales,
+                    cardSales,
+                    transferSales,
+                    totalSales: cashSales + cardSales + transferSales,
+                    totalExpenses,
+                    expectedCash,
+                    closingAmount,
+                    difference: closingAmount - expectedCash,
+                    ticketsCount: salesInSession.length,
+                },
+            };
+        }));
+
+        return enriched;
     }
 }

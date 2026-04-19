@@ -15,6 +15,11 @@ export class PurchaseItemDto {
     @IsNumber()
     @Min(0)
     cost: number;
+
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    salePrice?: number;
 }
 
 export class CreatePurchaseDto {
@@ -44,4 +49,8 @@ export class CreatePurchaseDto {
     @IsOptional()
     @IsDateString()
     dueDate?: string;
+
+    @IsOptional()
+    @IsString()
+    paymentSource?: 'CASH' | 'CARTERA';
 }

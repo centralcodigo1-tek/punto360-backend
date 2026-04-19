@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 import * as bcrypt from 'bcrypt';
@@ -26,33 +26,38 @@ export class UsersService {
     const password_hash = await bcrypt.hash(password, 10);
     const email = userData.email.toLowerCase().trim();
 
-    return this.prisma.$transaction(async (tx) => {
-      const newUser = await tx.users.create({
-        data: {
-          ...userData,
-          email,
-          password_hash,
-          company_id: creator.companyId,
-          is_active: true
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const newUser = await tx.users.create({
+          data: {
+            ...userData,
+            email,
+            password_hash,
+            company_id: creator.companyId,
+            is_active: true
+          }
+        });
+
+        if (roleIds && roleIds.length > 0) {
+          await tx.user_roles.createMany({
+            data: roleIds.map(rid => ({ user_id: newUser.id, role_id: rid }))
+          });
         }
+
+        if (branchIds && branchIds.length > 0) {
+          await tx.user_branches.createMany({
+            data: branchIds.map(bid => ({ user_id: newUser.id, branch_id: bid }))
+          });
+        }
+
+        return newUser;
       });
-
-      // Asignar Roles
-      if (roleIds && roleIds.length > 0) {
-        await tx.user_roles.createMany({
-          data: roleIds.map(rid => ({ user_id: newUser.id, role_id: rid }))
-        });
+    } catch (e: any) {
+      if (e.code === 'P2002') {
+        throw new BadRequestException('Ya existe un usuario con ese correo electrónico.');
       }
-
-      // Asignar Sucursales
-      if (branchIds && branchIds.length > 0) {
-        await tx.user_branches.createMany({
-          data: branchIds.map(bid => ({ user_id: newUser.id, branch_id: bid }))
-        });
-      }
-
-      return newUser;
-    });
+      throw new InternalServerErrorException(e.message ?? 'Error al crear el usuario.');
+    }
   }
 
   /** Actualizar un usuario */
