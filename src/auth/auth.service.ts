@@ -38,7 +38,8 @@ export class AuthService {
     });
 
     const totalUsers = await this.prisma.users.count();
-    console.log('[AUTH] total users in DB:', totalUsers, '| email queried:', normalizedEmail);
+    const allEmails = await this.prisma.users.findMany({ select: { email: true } });
+    console.log('[AUTH] total users in DB:', totalUsers, '| emails:', JSON.stringify(allEmails));
     console.log('[AUTH] user found:', !!user);
 
     if (!user) {
