@@ -37,7 +37,9 @@ export class AuthService {
       },
     });
 
-    console.log('[AUTH] user found:', !!user, '| email queried:', normalizedEmail);
+    const totalUsers = await this.prisma.users.count();
+    console.log('[AUTH] total users in DB:', totalUsers, '| email queried:', normalizedEmail);
+    console.log('[AUTH] user found:', !!user);
 
     if (!user) {
       throw new UnauthorizedException('Credenciales inválidas');
