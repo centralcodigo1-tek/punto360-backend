@@ -37,11 +37,6 @@ export class AuthService {
       },
     });
 
-    const totalUsers = await this.prisma.users.count();
-    const allEmails = await this.prisma.users.findMany({ select: { email: true } });
-    console.log('[AUTH] total users in DB:', totalUsers, '| emails:', JSON.stringify(allEmails));
-    console.log('[AUTH] user found:', !!user);
-
     if (!user) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
@@ -50,8 +45,6 @@ export class AuthService {
       password,
       user.password_hash,
     );
-
-    console.log('[AUTH] password valid:', isPasswordValid, '| hash prefix:', user.password_hash?.substring(0, 20));
 
     if (!isPasswordValid) {
       throw new UnauthorizedException('Credenciales inválidas');
