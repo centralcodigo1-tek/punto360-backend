@@ -1,6 +1,6 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateSaleDto } from './dto/create-sale.dto';
+import { CreateSaleDto, HoldSaleDto, CompleteSaleDto } from './dto/create-sale.dto';
 import type { ActiveUserData } from '../auth/interfaces/active-user-data.interface';
 
 @Injectable()
@@ -195,6 +195,123 @@ export class SalesService {
             },
             orderBy: { created_at: 'desc' }
         });
+    }
+
+    async holdSale(dto: HoldSaleDto, user: ActiveUserData) {
+        if (!user.branchIds || user.branchIds.length === 0) {
+            throw new BadRequestException("El usuario no tiene una sucursal asignada.");
+        }
+        const branchId = user.branchIds[0];
+
+        return this.prisma.$transaction(async (tx) => {
+            const sale = await tx.sales.create({
+                data: {
+                    company_id: user.companyId,
+                    branch_id: branchId,
+                    user_id: user.sub,
+                    total: dto.total,
+                    payment_method: 'PENDING',
+                    status: 'PENDING',
+                    is_credit: false,
+                }
+            });
+
+            await tx.sale_items.createMany({
+                data: dto.items.map(item => ({
+                    sale_id: sale.id,
+                    product_id: item.productId,
+                    quantity: item.quantity,
+                    price: item.price,
+                    subtotal: item.quantity * item.price,
+                }))
+            });
+
+            return sale;
+        });
+    }
+
+    async getPendingSales(user: ActiveUserData) {
+        if (!user.branchIds || user.branchIds.length === 0) return [];
+
+        return this.prisma.sales.findMany({
+            where: {
+                company_id: user.companyId,
+                branch_id: { in: user.branchIds },
+                status: 'PENDING',
+            },
+            include: {
+                sale_items: {
+                    include: { products: { select: { name: true, sku: true } } }
+                }
+            },
+            orderBy: { created_at: 'desc' }
+        });
+    }
+
+    async completePendingSale(saleId: string, dto: CompleteSaleDto, user: ActiveUserData) {
+        if (!user.branchIds || user.branchIds.length === 0) {
+            throw new BadRequestException("El usuario no tiene una sucursal asignada.");
+        }
+        const branchId = user.branchIds[0];
+
+        const isCredit = dto.paymentMethod === 'CREDIT';
+        if (isCredit && !dto.customerId) {
+            throw new BadRequestException('Una venta a crédito requiere un cliente asociado.');
+        }
+
+        return this.prisma.$transaction(async (tx) => {
+            const sale = await tx.sales.findFirst({
+                where: { id: saleId, company_id: user.companyId, status: 'PENDING' },
+                include: { sale_items: true }
+            });
+
+            if (!sale) throw new NotFoundException('Factura pendiente no encontrada.');
+
+            for (const item of sale.sale_items) {
+                const currentStock = await tx.stock.findFirst({
+                    where: { product_id: item.product_id, branch_id: branchId }
+                });
+
+                if (!currentStock || currentStock.quantity.toNumber() < Number(item.quantity)) {
+                    throw new BadRequestException(`Inventario insuficiente para completar la venta.`);
+                }
+
+                await tx.stock.update({
+                    where: { id: currentStock.id },
+                    data: { quantity: currentStock.quantity.toNumber() - Number(item.quantity) }
+                });
+
+                await tx.inventory_movements.create({
+                    data: {
+                        product_id: item.product_id,
+                        branch_id: branchId,
+                        type: 'OUT_SALE',
+                        quantity: item.quantity,
+                        reason: 'Venta Caja POS',
+                        reference_id: sale.id
+                    }
+                });
+            }
+
+            return tx.sales.update({
+                where: { id: saleId },
+                data: {
+                    status: 'PAID',
+                    payment_method: dto.paymentMethod,
+                    customer_id: dto.customerId || null,
+                    is_credit: isCredit,
+                }
+            });
+        });
+    }
+
+    async discardPendingSale(saleId: string, user: ActiveUserData) {
+        const sale = await this.prisma.sales.findFirst({
+            where: { id: saleId, company_id: user.companyId, status: 'PENDING' }
+        });
+        if (!sale) throw new NotFoundException('Factura pendiente no encontrada.');
+        await this.prisma.sales.delete({ where: { id: saleId } });
+        return { message: 'Factura descartada.' };
     }
 
     async cancelSale(saleId: string, user: ActiveUserData) {

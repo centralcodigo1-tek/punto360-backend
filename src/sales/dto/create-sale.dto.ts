@@ -28,3 +28,22 @@ export class CreateSaleDto {
     @IsString()
     customerId?: string;
 }
+
+export class HoldSaleDto {
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => SaleItemDto)
+    items: SaleItemDto[];
+
+    @IsNumber()
+    total: number;
+}
+
+export class CompleteSaleDto {
+    @IsString()
+    paymentMethod: string;
+
+    @IsOptional()
+    @IsString()
+    customerId?: string;
+}
