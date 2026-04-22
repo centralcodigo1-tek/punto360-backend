@@ -67,18 +67,21 @@ export class CashRegistersService {
             },
             include: {
                 sale_items: {
-                    include: { products: { select: { is_consignment: true } } }
+                    include: { products: { select: { name: true, is_consignment: true } } }
                 }
             },
         });
 
-        // Separar el subtotal consignación de cada ticket
-        const consignmentSales = salesInSession.reduce((sum, sale) => {
-            const consignmentSubtotal = sale.sale_items
-                .filter(i => i.products?.is_consignment)
-                .reduce((s, i) => s + Number(i.subtotal ?? 0), 0);
-            return sum + consignmentSubtotal;
-        }, 0);
+        // Desglose por producto de consignación
+        const consignmentMap = new Map<string, number>();
+        for (const sale of salesInSession) {
+            for (const item of sale.sale_items) {
+                if (!item.products?.is_consignment) continue;
+                const name = item.products.name;
+                consignmentMap.set(name, (consignmentMap.get(name) ?? 0) + Number(item.subtotal ?? 0));
+            }
+        }
+        const consignmentItems = Array.from(consignmentMap.entries()).map(([name, total]) => ({ name, total }));
 
         const cashSales = salesInSession
             .filter(s => s.payment_method === 'CASH')
@@ -158,7 +161,7 @@ export class CashRegistersService {
                 cashSales,
                 cardSales,
                 transferSales,
-                consignmentSales,
+                consignmentItems,
                 totalSales: cashSales + cardSales + transferSales,
                 totalExpenses,
                 totalIncomes,
