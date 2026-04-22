@@ -83,17 +83,23 @@ export class CashRegistersService {
         }
         const consignmentItems = Array.from(consignmentMap.entries()).map(([name, total]) => ({ name, total }));
 
+        // Calcular el subtotal de consignación por ticket para restarlo del total de inventario
+        const consignmentTotalBySale = (sale: typeof salesInSession[0]) =>
+            sale.sale_items
+                .filter(i => i.products?.is_consignment)
+                .reduce((s, i) => s + Number(i.subtotal ?? 0), 0);
+
         const cashSales = salesInSession
             .filter(s => s.payment_method === 'CASH')
-            .reduce((sum, s) => sum + Number(s.total), 0);
+            .reduce((sum, s) => sum + Number(s.total) - consignmentTotalBySale(s), 0);
 
         const cardSales = salesInSession
             .filter(s => s.payment_method === 'CARD')
-            .reduce((sum, s) => sum + Number(s.total), 0);
+            .reduce((sum, s) => sum + Number(s.total) - consignmentTotalBySale(s), 0);
 
         const transferSales = salesInSession
             .filter(s => s.payment_method === 'TRANSFER')
-            .reduce((sum, s) => sum + Number(s.total), 0);
+            .reduce((sum, s) => sum + Number(s.total) - consignmentTotalBySale(s), 0);
 
         // Movimientos manuales de caja (gastos e ingresos)
         const allMovements = await this.prisma.cash_movements.findMany({
