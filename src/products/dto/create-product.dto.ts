@@ -29,4 +29,8 @@ export class CreateProductDto {
 
     @IsBoolean()
     is_active: boolean;
+
+    @IsBoolean()
+    @IsOptional()
+    is_consignment?: boolean;
 }

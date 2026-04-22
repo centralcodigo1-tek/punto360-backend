@@ -65,8 +65,20 @@ export class CashRegistersService {
                 status: 'PAID',
                 created_at: { gte: session.opened_at! },
             },
-            select: { total: true, payment_method: true },
+            include: {
+                sale_items: {
+                    include: { products: { select: { is_consignment: true } } }
+                }
+            },
         });
+
+        // Separar el subtotal consignación de cada ticket
+        const consignmentSales = salesInSession.reduce((sum, sale) => {
+            const consignmentSubtotal = sale.sale_items
+                .filter(i => i.products?.is_consignment)
+                .reduce((s, i) => s + Number(i.subtotal ?? 0), 0);
+            return sum + consignmentSubtotal;
+        }, 0);
 
         const cashSales = salesInSession
             .filter(s => s.payment_method === 'CASH')
@@ -146,6 +158,7 @@ export class CashRegistersService {
                 cashSales,
                 cardSales,
                 transferSales,
+                consignmentSales,
                 totalSales: cashSales + cardSales + transferSales,
                 totalExpenses,
                 totalIncomes,

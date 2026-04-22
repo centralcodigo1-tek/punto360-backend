@@ -20,6 +20,7 @@ export class ProductsService {
                     sale_price: dto.sale_price,
                     unit_type: dto.unit_type || 'UNIT',
                     is_active: dto.is_active,
+                    is_consignment: dto.is_consignment ?? false,
                     company_id: user.companyId,
                 },
             });
@@ -133,7 +134,8 @@ export class ProductsService {
                 cost_price: dto.cost_price,
                 sale_price: dto.sale_price,
                 unit_type: dto.unit_type || 'UNIT',
-                is_active: dto.is_active
+                is_active: dto.is_active,
+                is_consignment: dto.is_consignment ?? false
             }
         });
     }

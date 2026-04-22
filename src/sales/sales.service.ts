@@ -36,7 +36,8 @@ export class SalesService {
 
             // 2. Procesar cada item, registrar en sale_items y descontar stock
             for (const item of dto.items) {
-                // Registrar detalle de venta
+                const product = await tx.products.findUnique({ where: { id: item.productId } });
+
                 await tx.sale_items.create({
                     data: {
                         sale_id: sale.id,
@@ -47,12 +48,15 @@ export class SalesService {
                     }
                 });
 
+                // Los productos de consignación no manejan stock
+                if (product?.is_consignment) continue;
+
                 // Validar y Actualizar Stock
                 const currentStock = await tx.stock.findFirst({
                     where: { product_id: item.productId, branch_id: branchId }
                 });
 
-                if (!currentStock ||  currentStock.quantity.toNumber() < item.quantity) {
+                if (!currentStock || currentStock.quantity.toNumber() < item.quantity) {
                     throw new BadRequestException(`Inventario insuficiente para procesar la venta (Producto ID: ${item.productId})`);
                 }
 
@@ -61,7 +65,6 @@ export class SalesService {
                     data: { quantity: currentStock.quantity.toNumber() - item.quantity }
                 });
 
-                // Registrar Movimiento de Inventario de Salida
                 await tx.inventory_movements.create({
                     data: {
                         product_id: item.productId,
