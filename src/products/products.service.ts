@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
+import { ImportProductsDto } from './dto/import-products.dto';
 import type { ActiveUserData } from '../auth/interfaces/active-user-data.interface';
 
 @Injectable()
@@ -111,6 +112,71 @@ export class ProductsService {
             where: { id },
             data: { is_active: !product.is_active }
         });
+    }
+
+    async importProducts(dto: ImportProductsDto, user: ActiveUserData) {
+        const branchId = user.branchIds?.[0];
+        const created: string[] = [];
+        const skipped: string[] = [];
+        const errors: { ref: string; reason: string }[] = [];
+
+        // Cache de categorías para no repetir queries
+        const categoryCache = new Map<string, string>();
+
+        for (const item of dto.productos) {
+            try {
+                // Buscar o crear categoría
+                const catName = (item.categoria ?? 'General').trim();
+                let categoryId = categoryCache.get(catName);
+
+                if (!categoryId) {
+                    let cat = await this.prisma.categories.findFirst({
+                        where: { company_id: user.companyId, name: { equals: catName, mode: 'insensitive' } },
+                    });
+                    if (!cat) {
+                        cat = await this.prisma.categories.create({
+                            data: { company_id: user.companyId, name: catName },
+                        });
+                    }
+                    categoryId = cat.id;
+                    categoryCache.set(catName, cat.id);
+                }
+
+                // Verificar si ya existe el SKU
+                const existing = await this.prisma.products.findUnique({
+                    where: { company_id_sku: { company_id: user.companyId, sku: item.reference } },
+                });
+                if (existing) {
+                    skipped.push(item.reference);
+                    continue;
+                }
+
+                // Crear producto + stock inicial
+                const product = await this.prisma.products.create({
+                    data: {
+                        company_id: user.companyId,
+                        category_id: categoryId,
+                        name: item.nombre,
+                        sku: item.reference,
+                        cost_price: item.precio_compra,
+                        sale_price: item.precio_venta,
+                        unit_type: 'UNIT',
+                        is_active: true,
+                        is_consignment: false,
+                    },
+                });
+
+                await this.prisma.stock.create({
+                    data: { product_id: product.id, branch_id: branchId, quantity: item.stock },
+                });
+
+                created.push(item.reference);
+            } catch (e: any) {
+                errors.push({ ref: item.reference, reason: e?.message ?? 'Error desconocido' });
+            }
+        }
+
+        return { created: created.length, skipped: skipped.length, errors, createdRefs: created, skippedRefs: skipped };
     }
 
     async update(id: string, dto: CreateProductDto, user: ActiveUserData) {
