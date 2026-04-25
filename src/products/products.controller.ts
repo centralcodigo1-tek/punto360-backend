@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
+import { ImportProductsDto } from './dto/import-products.dto';
 import { ActiveUser } from '../auth/decorators/active-user.decorator';
 import type { ActiveUserData } from '../auth/interfaces/active-user-data.interface';
 
@@ -19,6 +20,11 @@ export class ProductsController {
     @Get('next-sku')
     getNextSku(@ActiveUser() user: ActiveUserData) {
         return this.productsService.getNextSku(user);
+    }
+
+    @Post('import')
+    importProducts(@Body() dto: ImportProductsDto, @ActiveUser() user: ActiveUserData) {
+        return this.productsService.importProducts(dto, user);
     }
     
     @Get()
