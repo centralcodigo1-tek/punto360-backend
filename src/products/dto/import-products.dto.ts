@@ -3,7 +3,8 @@ import { Type } from 'class-transformer';
 
 export class ImportProductItemDto {
     @IsString()
-    reference: string;
+    @IsOptional()
+    reference?: string;
 
     @IsString()
     nombre: string;
@@ -23,6 +24,11 @@ export class ImportProductItemDto {
     @IsString()
     @IsOptional()
     categoria?: string;
+
+    @IsNumber()
+    @IsOptional()
+    @Type(() => Number)
+    tipo_venta?: number;
 }
 
 export class ImportProductsDto {

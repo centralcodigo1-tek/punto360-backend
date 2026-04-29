@@ -124,7 +124,14 @@ export class ProductsService {
         const categoryCache = new Map<string, string>();
 
         for (const item of dto.productos) {
+            let sku = item.reference?.trim() || '';
             try {
+                // Auto-generar SKU si no viene en el XML
+                if (!sku) {
+                    const next = await this.getNextSku(user);
+                    sku = next.sku;
+                }
+
                 // Buscar o crear categoría
                 const catName = (item.categoria ?? 'General').trim();
                 let categoryId = categoryCache.get(catName);
@@ -144,12 +151,14 @@ export class ProductsService {
 
                 // Verificar si ya existe el SKU
                 const existing = await this.prisma.products.findUnique({
-                    where: { company_id_sku: { company_id: user.companyId, sku: item.reference } },
+                    where: { company_id_sku: { company_id: user.companyId, sku } },
                 });
                 if (existing) {
-                    skipped.push(item.reference);
+                    skipped.push(sku);
                     continue;
                 }
+
+                const unitType = item.tipo_venta === 2 ? 'WEIGHT' : 'UNIT';
 
                 // Crear producto + stock inicial
                 const product = await this.prisma.products.create({
@@ -157,10 +166,10 @@ export class ProductsService {
                         company_id: user.companyId,
                         category_id: categoryId,
                         name: item.nombre,
-                        sku: item.reference,
+                        sku,
                         cost_price: item.precio_compra,
                         sale_price: item.precio_venta,
-                        unit_type: 'UNIT',
+                        unit_type: unitType,
                         is_active: true,
                         is_consignment: false,
                     },
@@ -170,9 +179,9 @@ export class ProductsService {
                     data: { product_id: product.id, branch_id: branchId, quantity: item.stock },
                 });
 
-                created.push(item.reference);
+                created.push(sku);
             } catch (e: any) {
-                errors.push({ ref: item.reference, reason: e?.message ?? 'Error desconocido' });
+                errors.push({ ref: sku || item.nombre, reason: e?.message ?? 'Error desconocido' });
             }
         }
 
