@@ -38,6 +38,7 @@ model branches {
   purchases           purchases[]
   sales               sales[]
   stock               stock[]
+  variant_stock       variant_stock[]
   user_branches       user_branches[]
 }
 
@@ -166,6 +167,7 @@ model products {
   unit_type           String?               @default("UNIT")
   is_active           Boolean?              @default(true)
   is_consignment      Boolean?              @default(false)
+  has_variants        Boolean               @default(false)
   created_at          DateTime?             @default(now()) @db.Timestamp(6)
   inventory_movements inventory_movements[]
   categories          categories?           @relation(fields: [category_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -173,8 +175,66 @@ model products {
   purchase_items      purchase_items[]
   sale_items          sale_items[]
   stock               stock[]
+  product_attributes  product_attributes[]
+  product_variants    product_variants[]
 
   @@unique([company_id, sku])
+}
+
+model product_attributes {
+  id         String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  product_id String             @db.Uuid
+  name       String
+  position   Int                @default(0)
+  products   products           @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  values     attribute_values[]
+}
+
+model attribute_values {
+  id             String                    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  attribute_id   String                    @db.Uuid
+  value          String
+  position       Int                       @default(0)
+  attribute      product_attributes        @relation(fields: [attribute_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  variant_values variant_attribute_values[]
+}
+
+model product_variants {
+  id             String                    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  product_id     String                    @db.Uuid
+  sku            String
+  cost_price     Decimal                   @default(0) @db.Decimal(12, 2)
+  sale_price     Decimal                   @db.Decimal(12, 2)
+  is_default     Boolean                   @default(false)
+  is_active      Boolean                   @default(true)
+  created_at     DateTime?                 @default(now()) @db.Timestamp(6)
+  products       products                  @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  values         variant_attribute_values[]
+  stock          variant_stock[]
+  sale_items     sale_items[]
+
+  @@unique([product_id, sku])
+}
+
+model variant_attribute_values {
+  variant_id         String           @db.Uuid
+  attribute_value_id String           @db.Uuid
+  variant            product_variants @relation(fields: [variant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  attribute_value    attribute_values @relation(fields: [attribute_value_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([variant_id, attribute_value_id])
+}
+
+model variant_stock {
+  id         String           @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  variant_id String           @db.Uuid
+  branch_id  String           @db.Uuid
+  quantity   Decimal          @default(0) @db.Decimal(12, 3)
+  updated_at DateTime?        @default(now()) @db.Timestamp(6)
+  variants   product_variants @relation(fields: [variant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  branches   branches         @relation(fields: [branch_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([variant_id, branch_id])
 }
 
 model purchase_items {
@@ -225,14 +285,16 @@ model roles {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model sale_items {
-  id         String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  sale_id    String?   @db.Uuid
-  product_id String?   @db.Uuid
-  quantity   Decimal?  @db.Decimal(12, 3)
-  price      Decimal?  @db.Decimal(12, 2)
-  subtotal   Decimal?  @db.Decimal(12, 2)
-  products   products? @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sales      sales?    @relation(fields: [sale_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id         String            @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  sale_id    String?           @db.Uuid
+  product_id String?           @db.Uuid
+  variant_id String?           @db.Uuid
+  quantity   Decimal?          @db.Decimal(12, 3)
+  price      Decimal?          @db.Decimal(12, 2)
+  subtotal   Decimal?          @db.Decimal(12, 2)
+  products   products?         @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  variants   product_variants? @relation(fields: [variant_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sales      sales?            @relation(fields: [sale_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 model sales {
