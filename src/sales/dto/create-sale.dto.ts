@@ -5,6 +5,10 @@ class SaleItemDto {
     @IsString()
     productId: string;
 
+    @IsString()
+    @IsOptional()
+    variantId?: string;
+
     @IsNumber()
     quantity: number;
 
