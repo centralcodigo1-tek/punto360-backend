@@ -87,8 +87,14 @@ export class ProductsService {
             include: {
                 categories: true,
                 stock: {
-                    where: {
-                        branch_id: { in: user.branchIds }
+                    where: { branch_id: { in: user.branchIds } }
+                },
+                product_variants: {
+                    where: { is_active: true },
+                    include: {
+                        stock: {
+                            where: { branch_id: { in: user.branchIds } }
+                        }
                     }
                 }
             },
