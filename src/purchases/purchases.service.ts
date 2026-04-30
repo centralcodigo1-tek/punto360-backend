@@ -97,24 +97,27 @@ export class PurchasesService {
                     },
                 });
 
-                // Aumentar stock
-                const existing = await tx.stock.findFirst({
-                    where: { product_id: item.productId, branch_id: branchId },
-                });
-
-                if (existing) {
-                    await tx.stock.update({
-                        where: { id: existing.id },
-                        data: { quantity: Number(existing.quantity) + Number(item.quantity) },
+                // Aumentar stock (variante o normal)
+                if (item.variantId) {
+                    await tx.variant_stock.upsert({
+                        where: { variant_id_branch_id: { variant_id: item.variantId, branch_id: branchId } },
+                        create: { variant_id: item.variantId, branch_id: branchId, quantity: item.quantity },
+                        update: { quantity: { increment: Number(item.quantity) }, updated_at: new Date() },
                     });
                 } else {
-                    await tx.stock.create({
-                        data: {
-                            product_id: item.productId,
-                            branch_id: branchId,
-                            quantity: item.quantity,
-                        },
+                    const existing = await tx.stock.findFirst({
+                        where: { product_id: item.productId, branch_id: branchId },
                     });
+                    if (existing) {
+                        await tx.stock.update({
+                            where: { id: existing.id },
+                            data: { quantity: Number(existing.quantity) + Number(item.quantity) },
+                        });
+                    } else {
+                        await tx.stock.create({
+                            data: { product_id: item.productId, branch_id: branchId, quantity: item.quantity },
+                        });
+                    }
                 }
 
                 // Actualizar costo y precio de venta del producto
