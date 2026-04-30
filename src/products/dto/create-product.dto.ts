@@ -33,4 +33,8 @@ export class CreateProductDto {
     @IsBoolean()
     @IsOptional()
     is_consignment?: boolean;
+
+    @IsBoolean()
+    @IsOptional()
+    has_variants?: boolean;
 }
