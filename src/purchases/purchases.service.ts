@@ -99,11 +99,19 @@ export class PurchasesService {
 
                 // Aumentar stock (variante o normal)
                 if (item.variantId) {
-                    await tx.variant_stock.upsert({
+                    const existingVs = await tx.variant_stock.findUnique({
                         where: { variant_id_branch_id: { variant_id: item.variantId, branch_id: branchId } },
-                        create: { variant_id: item.variantId, branch_id: branchId, quantity: item.quantity },
-                        update: { quantity: { increment: Number(item.quantity) }, updated_at: new Date() },
                     });
+                    if (existingVs) {
+                        await tx.variant_stock.update({
+                            where: { id: existingVs.id },
+                            data: { quantity: Number(existingVs.quantity) + Number(item.quantity), updated_at: new Date() },
+                        });
+                    } else {
+                        await tx.variant_stock.create({
+                            data: { variant_id: item.variantId, branch_id: branchId, quantity: item.quantity },
+                        });
+                    }
                 } else {
                     const existing = await tx.stock.findFirst({
                         where: { product_id: item.productId, branch_id: branchId },
@@ -120,8 +128,8 @@ export class PurchasesService {
                     }
                 }
 
-                // Actualizar costo y precio de venta del producto
-                if (item.cost > 0 || (item.salePrice !== undefined && item.salePrice > 0)) {
+                // Actualizar costo y precio de venta del producto (solo si no es variante)
+                if (!item.variantId && (item.cost > 0 || (item.salePrice !== undefined && item.salePrice > 0))) {
                     await tx.products.update({
                         where: { id: item.productId },
                         data: {
