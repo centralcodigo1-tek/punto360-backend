@@ -42,7 +42,6 @@ export class SalesService {
                     data: {
                         sale_id: sale.id,
                         product_id: item.productId,
-                        variant_id: item.variantId || null,
                         quantity: item.quantity,
                         price: item.price,
                         subtotal: item.quantity * item.price
@@ -51,31 +50,16 @@ export class SalesService {
 
                 if (product?.is_consignment) continue;
 
-                if (item.variantId) {
-                    // Descuento desde variant_stock
-                    const varStock = await tx.variant_stock.findUnique({
-                        where: { variant_id_branch_id: { variant_id: item.variantId, branch_id: branchId } }
-                    });
-                    if (!varStock || varStock.quantity.toNumber() < item.quantity) {
-                        throw new BadRequestException(`Inventario insuficiente para la variante seleccionada`);
-                    }
-                    await tx.variant_stock.update({
-                        where: { id: varStock.id },
-                        data: { quantity: varStock.quantity.toNumber() - item.quantity, updated_at: new Date() }
-                    });
-                } else {
-                    // Descuento desde stock normal
-                    const currentStock = await tx.stock.findFirst({
-                        where: { product_id: item.productId, branch_id: branchId }
-                    });
-                    if (!currentStock || currentStock.quantity.toNumber() < item.quantity) {
-                        throw new BadRequestException(`Inventario insuficiente para procesar la venta (Producto ID: ${item.productId})`);
-                    }
-                    await tx.stock.update({
-                        where: { id: currentStock.id },
-                        data: { quantity: currentStock.quantity.toNumber() - item.quantity }
-                    });
+                const currentStock = await tx.stock.findFirst({
+                    where: { product_id: item.productId, branch_id: branchId }
+                });
+                if (!currentStock || currentStock.quantity.toNumber() < item.quantity) {
+                    throw new BadRequestException(`Inventario insuficiente para procesar la venta (Producto ID: ${item.productId})`);
                 }
+                await tx.stock.update({
+                    where: { id: currentStock.id },
+                    data: { quantity: currentStock.quantity.toNumber() - item.quantity }
+                });
 
                 await tx.inventory_movements.create({
                     data: {
