@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ImportProductsDto } from './dto/import-products.dto';
+import { CreateAttributeDto, CreateVariantDto, UpdateVariantDto, UpdateVariantStockDto } from './dto/variant.dto';
 import type { ActiveUserData } from '../auth/interfaces/active-user-data.interface';
 
 @Injectable()
@@ -22,6 +23,7 @@ export class ProductsService {
                     unit_type: dto.unit_type || 'UNIT',
                     is_active: dto.is_active,
                     is_consignment: dto.is_consignment ?? false,
+                    has_variants: dto.has_variants ?? false,
                     company_id: user.companyId,
                 },
             });
@@ -85,8 +87,14 @@ export class ProductsService {
             include: {
                 categories: true,
                 stock: {
-                    where: {
-                        branch_id: { in: user.branchIds }
+                    where: { branch_id: { in: user.branchIds } }
+                },
+                product_variants: {
+                    where: { is_active: true },
+                    include: {
+                        stock: {
+                            where: { branch_id: { in: user.branchIds } }
+                        }
                     }
                 }
             },
@@ -120,19 +128,16 @@ export class ProductsService {
         const skipped: string[] = [];
         const errors: { ref: string; reason: string }[] = [];
 
-        // Cache de categorías para no repetir queries
         const categoryCache = new Map<string, string>();
 
         for (const item of dto.productos) {
             let sku = item.reference?.trim() || '';
             try {
-                // Auto-generar SKU si no viene en el XML
                 if (!sku) {
                     const next = await this.getNextSku(user);
                     sku = next.sku;
                 }
 
-                // Buscar o crear categoría
                 const catName = (item.categoria ?? 'General').trim();
                 let categoryId = categoryCache.get(catName);
 
@@ -149,7 +154,6 @@ export class ProductsService {
                     categoryCache.set(catName, cat.id);
                 }
 
-                // Verificar si ya existe el SKU
                 const existing = await this.prisma.products.findUnique({
                     where: { company_id_sku: { company_id: user.companyId, sku } },
                 });
@@ -160,7 +164,6 @@ export class ProductsService {
 
                 const unitType = item.tipo_venta === 2 ? 'WEIGHT' : 'UNIT';
 
-                // Crear producto + stock inicial
                 const product = await this.prisma.products.create({
                     data: {
                         company_id: user.companyId,
@@ -188,8 +191,189 @@ export class ProductsService {
         return { created: created.length, skipped: skipped.length, errors, createdRefs: created, skippedRefs: skipped };
     }
 
+    // ── Variantes ──────────────────────────────────────────────────────────────
+
+    async getVariants(productId: string, user: ActiveUserData) {
+        const product = await this.prisma.products.findFirst({
+            where: { id: productId, company_id: user.companyId },
+        });
+        if (!product) throw new NotFoundException('Producto no encontrado');
+
+        return this.prisma.product_variants.findMany({
+            where: { product_id: productId },
+            include: {
+                values: {
+                    include: {
+                        attribute_value: {
+                            include: { attribute: true },
+                        },
+                    },
+                },
+                stock: {
+                    where: { branch_id: { in: user.branchIds } },
+                },
+            },
+            orderBy: { created_at: 'asc' },
+        });
+    }
+
+    async addAttribute(productId: string, dto: CreateAttributeDto, user: ActiveUserData) {
+        const product = await this.prisma.products.findFirst({
+            where: { id: productId, company_id: user.companyId },
+        });
+        if (!product) throw new NotFoundException('Producto no encontrado');
+
+        const attr = await this.prisma.product_attributes.create({
+            data: {
+                product_id: productId,
+                name: dto.name,
+                values: {
+                    create: dto.values.map((v, i) => ({ value: v, position: i })),
+                },
+            },
+            include: { values: true },
+        });
+
+        if (!product.has_variants) {
+            await this.prisma.products.update({
+                where: { id: productId },
+                data: { has_variants: true },
+            });
+        }
+
+        return attr;
+    }
+
+    async getAttributes(productId: string, user: ActiveUserData) {
+        const product = await this.prisma.products.findFirst({
+            where: { id: productId, company_id: user.companyId },
+        });
+        if (!product) throw new NotFoundException('Producto no encontrado');
+
+        return this.prisma.product_attributes.findMany({
+            where: { product_id: productId },
+            include: { values: { orderBy: { position: 'asc' } } },
+            orderBy: { position: 'asc' },
+        });
+    }
+
+    async deleteAttribute(attributeId: string, user: ActiveUserData) {
+        const attr = await this.prisma.product_attributes.findFirst({
+            where: { id: attributeId, products: { company_id: user.companyId } },
+            include: { products: { select: { id: true } } },
+        });
+        if (!attr) throw new NotFoundException('Atributo no encontrado');
+
+        await this.prisma.product_attributes.delete({ where: { id: attributeId } });
+
+        const remaining = await this.prisma.product_attributes.count({
+            where: { product_id: attr.products.id },
+        });
+        if (remaining === 0) {
+            await this.prisma.products.update({
+                where: { id: attr.products.id },
+                data: { has_variants: false },
+            });
+        }
+        return { ok: true };
+    }
+
+    async createVariant(productId: string, dto: CreateVariantDto, user: ActiveUserData) {
+        const product = await this.prisma.products.findFirst({
+            where: { id: productId, company_id: user.companyId },
+        });
+        if (!product) throw new NotFoundException('Producto no encontrado');
+
+        const existing = await this.prisma.product_variants.findFirst({
+            where: { product_id: productId, sku: dto.sku },
+        });
+        if (existing) throw new BadRequestException(`El SKU "${dto.sku}" ya existe en este producto`);
+
+        const branchId = user.branchIds[0];
+
+        return this.prisma.product_variants.create({
+            data: {
+                product_id: productId,
+                sku: dto.sku,
+                sale_price: dto.sale_price,
+                cost_price: dto.cost_price ?? 0,
+                is_default: dto.is_default ?? false,
+                values: {
+                    create: dto.attribute_value_ids.map(id => ({ attribute_value_id: id })),
+                },
+                stock: {
+                    create: { branch_id: branchId, quantity: dto.stock ?? 0 },
+                },
+            },
+            include: {
+                values: { include: { attribute_value: { include: { attribute: true } } } },
+                stock: true,
+            },
+        });
+    }
+
+    async updateVariant(variantId: string, dto: UpdateVariantDto, user: ActiveUserData) {
+        const variant = await this.prisma.product_variants.findFirst({
+            where: { id: variantId, products: { company_id: user.companyId } },
+        });
+        if (!variant) throw new NotFoundException('Variante no encontrada');
+
+        return this.prisma.product_variants.update({
+            where: { id: variantId },
+            data: {
+                ...(dto.sku !== undefined && { sku: dto.sku }),
+                ...(dto.sale_price !== undefined && { sale_price: dto.sale_price }),
+                ...(dto.cost_price !== undefined && { cost_price: dto.cost_price }),
+                ...(dto.is_active !== undefined && { is_active: dto.is_active }),
+            },
+        });
+    }
+
+    async updateVariantStock(variantId: string, dto: UpdateVariantStockDto, user: ActiveUserData) {
+        const variant = await this.prisma.product_variants.findFirst({
+            where: { id: variantId, products: { company_id: user.companyId } },
+        });
+        if (!variant) throw new NotFoundException('Variante no encontrada');
+
+        const branchId = user.branchIds[0];
+
+        return this.prisma.variant_stock.upsert({
+            where: { variant_id_branch_id: { variant_id: variantId, branch_id: branchId } },
+            create: { variant_id: variantId, branch_id: branchId, quantity: dto.quantity },
+            update: { quantity: dto.quantity, updated_at: new Date() },
+        });
+    }
+
+    async deleteVariant(variantId: string, user: ActiveUserData) {
+        const variant = await this.prisma.product_variants.findFirst({
+            where: { id: variantId, products: { company_id: user.companyId } },
+        });
+        if (!variant) throw new NotFoundException('Variante no encontrada');
+
+        await this.prisma.product_variants.delete({ where: { id: variantId } });
+        return { ok: true };
+    }
+
+    async findVariantBySku(sku: string, user: ActiveUserData) {
+        const variant = await this.prisma.product_variants.findFirst({
+            where: {
+                sku,
+                products: { company_id: user.companyId, is_active: true },
+                is_active: true,
+            },
+            include: {
+                products: { select: { id: true, name: true, unit_type: true } },
+                values: {
+                    include: { attribute_value: { include: { attribute: true } } },
+                },
+                stock: { where: { branch_id: { in: user.branchIds } } },
+            },
+        });
+        if (!variant) throw new NotFoundException('Variante no encontrada');
+        return variant;
+    }
+
     async update(id: string, dto: CreateProductDto, user: ActiveUserData) {
-        // Ignoramos stock en la actualización general por diseño de POS
         const product = await this.prisma.products.findFirst({
             where: {
                 id,
@@ -210,7 +394,8 @@ export class ProductsService {
                 sale_price: dto.sale_price,
                 unit_type: dto.unit_type || 'UNIT',
                 is_active: dto.is_active,
-                is_consignment: dto.is_consignment ?? false
+                is_consignment: dto.is_consignment ?? false,
+                has_variants: dto.has_variants ?? false,
             }
         });
     }
