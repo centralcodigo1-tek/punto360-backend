@@ -14,6 +14,10 @@ export class CreateVariantDto {
     @IsString()
     sku: string;
 
+    @IsString()
+    @IsOptional()
+    barcode?: string;
+
     @Type(() => Number)
     @IsNumber()
     sale_price: number;
@@ -41,6 +45,10 @@ export class UpdateVariantDto {
     @IsString()
     @IsOptional()
     sku?: string;
+
+    @IsString()
+    @IsOptional()
+    barcode?: string;
 
     @Type(() => Number)
     @IsNumber()
