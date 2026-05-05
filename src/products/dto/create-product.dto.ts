@@ -41,8 +41,4 @@ export class CreateProductDto {
     @IsBoolean()
     @IsOptional()
     has_variants?: boolean;
-
-    @IsString()
-    @IsOptional()
-    barcode?: string;
 }
