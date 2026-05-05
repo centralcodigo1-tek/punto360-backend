@@ -19,6 +19,14 @@ export class SalesService {
             throw new BadRequestException('Una venta a crédito requiere un cliente asociado.');
         }
 
+        // Pre-fetch all products outside transaction to reduce sequential queries
+        const productIds = [...new Set(dto.items.map(i => i.productId))];
+        const products = await this.prisma.products.findMany({
+            where: { id: { in: productIds } },
+            select: { id: true, is_consignment: true },
+        });
+        const productMap = new Map(products.map(p => [p.id, p]));
+
         return this.prisma.$transaction(async (tx) => {
             // 1. Crear el Ticket de Venta
             const sale = await tx.sales.create({
@@ -36,7 +44,7 @@ export class SalesService {
 
             // 2. Procesar cada item, registrar en sale_items y descontar stock
             for (const item of dto.items) {
-                const product = await tx.products.findUnique({ where: { id: item.productId } });
+                const product = productMap.get(item.productId);
 
                 await tx.sale_items.create({
                     data: {
@@ -88,7 +96,7 @@ export class SalesService {
             }
 
             return sale;
-        });
+        }, { timeout: 30000 });
     }
 
     async getSalesStats(user: ActiveUserData) {
