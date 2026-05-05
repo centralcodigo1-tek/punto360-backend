@@ -30,6 +30,11 @@ export class ProductsController {
         return this.productsService.findVariantBySku(sku, user);
     }
 
+    @Get('scan/:barcode')
+    scanByBarcode(@Param('barcode') barcode: string, @ActiveUser() user: ActiveUserData) {
+        return this.productsService.scanByBarcode(barcode, user);
+    }
+
     @Post('import')
     importProducts(@Body() dto: ImportProductsDto, @ActiveUser() user: ActiveUserData) {
         return this.productsService.importProducts(dto, user);

@@ -79,6 +79,10 @@ async function run() {
   // sale_items.variant_id
   await sql(`ALTER TABLE "sale_items" ADD COLUMN IF NOT EXISTS "variant_id" UUID`);
 
+  // barcode en productos y variantes
+  await sql(`ALTER TABLE "products"         ADD COLUMN IF NOT EXISTS "barcode" TEXT`);
+  await sql(`ALTER TABLE "product_variants" ADD COLUMN IF NOT EXISTS "barcode" TEXT`);
+
   // Foreign keys — idempotentes via DO/IF NOT EXISTS en pg_constraint
   const fk = async (constraint, stmt) => {
     await prisma.$executeRawUnsafe(`

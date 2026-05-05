@@ -25,6 +25,7 @@ export class ProductsService {
                     is_consignment: dto.is_consignment ?? false,
                     has_variants: dto.has_variants ?? false,
                     company_id: user.companyId,
+                    barcode: dto.barcode || null,
                 },
             });
 
@@ -295,6 +296,7 @@ export class ProductsService {
             data: {
                 product_id: productId,
                 sku: dto.sku,
+                barcode: dto.barcode || null,
                 sale_price: dto.sale_price,
                 cost_price: dto.cost_price ?? 0,
                 is_default: dto.is_default ?? false,
@@ -322,6 +324,7 @@ export class ProductsService {
             where: { id: variantId },
             data: {
                 ...(dto.sku !== undefined && { sku: dto.sku }),
+                ...(dto.barcode !== undefined && { barcode: dto.barcode || null }),
                 ...(dto.sale_price !== undefined && { sale_price: dto.sale_price }),
                 ...(dto.cost_price !== undefined && { cost_price: dto.cost_price }),
                 ...(dto.is_active !== undefined && { is_active: dto.is_active }),
@@ -352,6 +355,34 @@ export class ProductsService {
 
         await this.prisma.product_variants.delete({ where: { id: variantId } });
         return { ok: true };
+    }
+
+    async scanByBarcode(barcode: string, user: ActiveUserData) {
+        // Buscar producto simple por barcode
+        const product = await this.prisma.products.findFirst({
+            where: { barcode, company_id: user.companyId, is_active: true },
+            include: {
+                stock: { where: { branch_id: { in: user.branchIds } } },
+            },
+        });
+        if (product) return { type: 'product' as const, data: product };
+
+        // Buscar variante por barcode
+        const variant = await this.prisma.product_variants.findFirst({
+            where: {
+                barcode,
+                is_active: true,
+                products: { company_id: user.companyId, is_active: true },
+            },
+            include: {
+                products: { select: { id: true, name: true, unit_type: true } },
+                values: { include: { attribute_value: { include: { attribute: true } } } },
+                stock: { where: { branch_id: { in: user.branchIds } } },
+            },
+        });
+        if (variant) return { type: 'variant' as const, data: variant };
+
+        throw new NotFoundException('Código de barras no encontrado');
     }
 
     async findVariantBySku(sku: string, user: ActiveUserData) {
@@ -396,6 +427,7 @@ export class ProductsService {
                 is_active: dto.is_active,
                 is_consignment: dto.is_consignment ?? false,
                 has_variants: dto.has_variants ?? false,
+                barcode: dto.barcode ?? null,
             }
         });
     }
