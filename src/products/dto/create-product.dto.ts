@@ -8,6 +8,10 @@ export class CreateProductDto {
     @IsString()
     sku: string;
 
+    @IsString()
+    @IsOptional()
+    barcode?: string;
+
     @IsUUID()
     category_id: string;
 
