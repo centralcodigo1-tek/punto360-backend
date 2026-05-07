@@ -14,11 +14,18 @@ export class PurchasesService {
 
         const total = Number(dto.total);
         const paidAmount = Number(dto.paidAmount || 0);
-        
+
         // Determinar estado de la compra
         let status = 'PAID';
         if (paidAmount === 0) status = 'PENDING';
         else if (paidAmount < total) status = 'PARTIAL';
+
+        // Pre-fetch supplier name fuera de la transacción para evitar timeout
+        let supplierName = "";
+        if (dto.supplierId && paidAmount > 0) {
+            const supplier = await this.prisma.suppliers.findUnique({ where: { id: dto.supplierId }, select: { name: true } });
+            if (supplier) supplierName = supplier.name;
+        }
 
         return this.prisma.$transaction(async (tx) => {
             // 1. Crear cabecera de la compra con información de pago
@@ -45,16 +52,9 @@ export class PurchasesService {
                     },
                 });
 
-                // 3. Obtener nombre del proveedor para el motivo
-                let supplierName = "";
-                if (dto.supplierId) {
-                    const supplier = await tx.suppliers.findUnique({ where: { id: dto.supplierId }, select: { name: true } });
-                    if (supplier) supplierName = supplier.name;
-                }
                 const purchaseRef = `Compra #${purchase.id.split('-')[0]}${supplierName ? ` [${supplierName}]` : ''}`;
 
                 if (dto.paymentSource === 'CARTERA') {
-                    // Descontar de cartera
                     await tx.cartera_movements.create({
                         data: {
                             company_id: user.companyId,
@@ -68,7 +68,6 @@ export class PurchasesService {
                         },
                     });
                 } else if (dto.paymentMethod === 'CASH') {
-                    // Descontar de caja si hay sesión abierta
                     const activeSession = await tx.cash_registers.findFirst({
                         where: { branch_id: branchId, company_id: user.companyId, status: 'OPEN' }
                     });
@@ -86,7 +85,7 @@ export class PurchasesService {
                 }
             }
 
-            // 4. Registrar ítems y actualizar stock
+            // 3. Registrar ítems y actualizar stock
             for (const item of dto.items) {
                 await tx.purchase_items.create({
                     data: {
@@ -153,7 +152,7 @@ export class PurchasesService {
             }
 
             return purchase;
-        });
+        }, { timeout: 30000 });
     }
 
     /** Historial de compras con filtros */
@@ -212,14 +211,14 @@ export class PurchasesService {
         const branchId = user.branchIds?.[0];
         const purchase = await this.prisma.purchases.findUnique({
             where: { id: purchaseId },
-            include: { 
+            include: {
                 purchase_payments: true,
                 suppliers: { select: { name: true } }
             }
         });
 
         if (!purchase) throw new NotFoundException('Compra no encontrada');
-        
+
         const total = Number(purchase.total);
         const currentPaid = Number(purchase.paid_amount || 0);
         const newPaid = currentPaid + Number(amount);
@@ -265,6 +264,6 @@ export class PurchasesService {
             }
 
             return updated;
-        });
+        }, { timeout: 30000 });
     }
 }
